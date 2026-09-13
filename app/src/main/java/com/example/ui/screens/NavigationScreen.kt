@@ -25,14 +25,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.map.MapLayerType
 import com.example.model.FusionMode
 import com.example.ui.DataSourceMode
 import com.example.ui.NavViewModel
-import com.example.ui.components.ArtificialHorizonGimbal
-import com.example.ui.components.GnssModeToggleBar
-import com.example.ui.components.MapLayerType
-import com.example.ui.components.TelemetryHud
-import com.example.ui.components.VectorMapCanvas
+import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.voice.VoiceAssistantState
 
@@ -46,6 +43,12 @@ fun NavigationScreen(
     val currentImu by viewModel.currentImu.collectAsState()
     val currentGnss by viewModel.currentGnss.collectAsState()
     val driftMetrics by viewModel.driftMetrics.collectAsState()
+    val digitalTwinMetrics by viewModel.digitalTwinMetrics.collectAsState()
+    val navigationIntegrity by viewModel.navigationIntegrity.collectAsState()
+    val gnssSpoofingReport by viewModel.gnssSpoofingReport.collectAsState()
+    val roadLayerState by viewModel.roadLayerState.collectAsState()
+    val multiHypothesisReport by viewModel.multiHypothesisReport.collectAsState()
+    val undergroundTopologyReport by viewModel.undergroundTopologyReport.collectAsState()
     val isJamming by viewModel.isManualJammingActive.collectAsState()
     val mapOptions by viewModel.mapOptions.collectAsState()
     val dataSourceMode by viewModel.dataSourceMode.collectAsState()
@@ -86,9 +89,13 @@ fun NavigationScreen(
             rawDrTrail = viewModel.fusionEngine.rawDrTrail,
             aiInsTrail = viewModel.fusionEngine.aiInsTrail,
             mapMatchedTrail = viewModel.fusionEngine.mapMatchedTrail,
+            visualTrail = viewModel.fusionEngine.trajectoryDVisualTrail,
             roadSegments = viewModel.benchmarkEngine.currentScenario.roadSegments,
             destination = destination,
             mapOptions = mapOptions,
+            spoofingReport = gnssSpoofingReport,
+            multiHypothesisReport = multiHypothesisReport,
+            undergroundReport = undergroundTopologyReport,
             terrainTileEngine = viewModel.terrainTileEngine,
             tileRepaintTrigger = tileRepaintTrigger,
             isVoiceSpeaking = voiceState == VoiceAssistantState.SPEAKING,
@@ -390,6 +397,23 @@ fun NavigationScreen(
                     }
                 }
             }
+
+            // Real-time Navigation Integrity & Digital Twin Research Laboratory Card
+            DigitalTwinLabCard(
+                integrityReport = navigationIntegrity,
+                digitalTwinMetrics = digitalTwinMetrics,
+                mapOptions = mapOptions,
+                onToggleMapOption = { transform -> viewModel.updateMapOptions(transform) },
+                onSelectNavState = { state -> viewModel.setSimulatedNavState(state) },
+                gnssSpoofingReport = gnssSpoofingReport,
+                onToggleSpoofingSimulation = { active -> viewModel.toggleSimulatedSpoofingAttack(active) },
+                roadLayerState = roadLayerState,
+                onSelectLayerOverride = { layer -> viewModel.setTargetRoadLayer(layer) },
+                multiHypothesisReport = multiHypothesisReport,
+                onSelectMultiHypothesisScenario = { preset -> viewModel.setMultiHypothesisScenario(preset) },
+                undergroundTopologyReport = undergroundTopologyReport,
+                onToggleUndergroundDescent = { active -> viewModel.toggleUndergroundDescent(active) }
+            )
         }
 
         // =========================================================================
@@ -446,17 +470,38 @@ fun NavigationScreen(
                         }
                     }
 
-                    // Center: Geodetic Lat/Lng & Target Hint
+                    // Center: 3D Geodetic Lat/Lng, Layer Level & Elevation
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = CyanAccent.copy(alpha = 0.2f),
+                                border = androidx.compose.foundation.BorderStroke(0.8.dp, CyanAccent)
+                            ) {
+                                Text(
+                                    text = vehicleState.roadLayerLevel,
+                                    fontSize = 8.5.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = CyanAccent,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                            val altSign = if (vehicleState.relativeAltitudeMeters >= 0) "+" else ""
+                            Text(
+                                text = "$altSign${"%.1f".format(vehicleState.relativeAltitudeMeters)}m · ${"%.4f".format(vehicleState.lat)}°N, ${"%.4f".format(vehicleState.lng)}°E",
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        val rateSign = if (vehicleState.verticalVelocityMps >= 0) "+" else ""
                         Text(
-                            text = "${"%.4f".format(vehicleState.lat)}°N, ${"%.4f".format(vehicleState.lng)}°E",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "Long press map to set target",
+                            text = "Vv: $rateSign${"%.2f".format(vehicleState.verticalVelocityMps)} m/s · Long press map to set target",
                             fontSize = 7.5.sp,
                             color = AmberAccent,
                             fontFamily = FontFamily.Monospace
@@ -559,7 +604,7 @@ fun NavigationScreen(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = SpaceDarkSurface),
                 border = androidx.compose.foundation.BorderStroke(1.5.dp, CyanAccent.copy(alpha = 0.6f)),
-                shadowElevation = 16.dp,
+                elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("tactical_options_dropdown_panel")
@@ -774,6 +819,12 @@ fun NavigationScreen(
                         color = MapMatchedPath,
                         checked = mapOptions.showMapMatched,
                         onCheckedChange = { viewModel.updateMapOptions { opt -> opt.copy(showMapMatched = it) } }
+                    )
+                    LayerSwitchRow(
+                        label = "Visual-Inertial Odometry (Trajectory D)",
+                        color = VisualInsPath,
+                        checked = mapOptions.showVisualIns,
+                        onCheckedChange = { viewModel.updateMapOptions { opt -> opt.copy(showVisualIns = it) } }
                     )
                     LayerSwitchRow(
                         label = "Road Vector Network & Street Labels",

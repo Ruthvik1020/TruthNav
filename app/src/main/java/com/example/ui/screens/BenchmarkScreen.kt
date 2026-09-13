@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.BenchmarkScenario
 import com.example.ui.NavViewModel
+import com.example.ui.components.DigitalTwinLabCard
 import com.example.ui.theme.*
 
 @Composable
@@ -31,6 +32,9 @@ fun BenchmarkScreen(
     val isPlaying by viewModel.isBenchmarkPlaying.collectAsState()
     val selectedIndex by viewModel.selectedScenarioIndex.collectAsState()
     val driftMetrics by viewModel.driftMetrics.collectAsState()
+    val digitalTwinMetrics by viewModel.digitalTwinMetrics.collectAsState()
+    val navigationIntegrity by viewModel.navigationIntegrity.collectAsState()
+    val mapOptions by viewModel.mapOptions.collectAsState()
     val savedBenchmarks by viewModel.savedBenchmarks.collectAsState()
 
     val currentScenario = viewModel.benchmarkEngine.scenarios[selectedIndex]
@@ -171,6 +175,15 @@ fun BenchmarkScreen(
             }
         }
 
+        // Real-time Navigation Integrity & Digital Twin Research Laboratory Card
+        DigitalTwinLabCard(
+            integrityReport = navigationIntegrity,
+            digitalTwinMetrics = digitalTwinMetrics,
+            mapOptions = mapOptions,
+            onToggleMapOption = viewModel::updateMapOptions,
+            onSelectNavState = viewModel::setSimulatedNavState
+        )
+
         // ISRO Performance Scorecard Card
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -238,7 +251,7 @@ fun BenchmarkScreen(
                     )
                 }
 
-                Divider(color = SpaceBorder.copy(alpha = 0.5f))
+                HorizontalDivider(color = SpaceBorder.copy(alpha = 0.5f))
 
                 Text(
                     text = "Benchmark Standard: Positional drift < 10% distance traveled (< 5m over 50m blackout, < 100m over 1km at 60 km/h in tunnels).",

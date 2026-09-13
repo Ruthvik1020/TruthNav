@@ -39,6 +39,7 @@ val PureDrPath = Color(0xFFFF4D4D)
 val AiInsPath = Color(0xFFFFB703)
 val GroundTruthPath = Color(0xFF10B981)
 val MapMatchedPath = Color(0xFF00E5FF)
+val VisualInsPath = Color(0xFFA855F7)
 val RoadVectorColor = Color(0xFF1E293B)
 val RoadVectorHighColor = Color(0xFF334155)
 

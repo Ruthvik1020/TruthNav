@@ -27,16 +27,22 @@ class MapMatchingEngine {
         val matchedRoadName: String,
         val orthogonalDistanceMeters: Float,
         val headingDeltaDeg: Float,
-        val isSnapped: Boolean
+        val isSnapped: Boolean,
+        val roadBearingDeg: Float = 0f,
+        val matchedLayerId: String = "L0",
+        val matchedLayerLevel: String = "L0",
+        val nominalAltitudeMeters: Float = 0f
     )
 
     /**
-     * Matches raw dead reckoning position (lat, lng, heading) to the nearest road network segment
+     * Matches raw dead reckoning position (lat, lng, heading, relative altitude)
+     * to the nearest road network segment in 3D (differentiating flyovers, underpasses, tunnels)
      */
     fun matchPosition(
         lat: Double,
         lng: Double,
         headingDeg: Float,
+        relativeAltitudeMeters: Float = 0f,
         maxSnapDistanceMeters: Float = 25f
     ): MatchResult {
         if (roadSegments.isEmpty()) {
@@ -61,7 +67,12 @@ class MapMatchingEngine {
 
             // Weight distance and heading alignment
             val headingPenalty = if (diffBearing > 45f && diffBearing < 135f) 20f else 0f
-            val totalCost = dist + headingPenalty
+
+            // 3D Altitude penalty for stacked structures (Flyover vs Surface vs Underpass)
+            val altDiff = abs(relativeAltitudeMeters - segment.nominalAltitudeMeters)
+            val altPenalty = altDiff * 3.5f
+
+            val totalCost = dist + headingPenalty + altPenalty
 
             if (totalCost < minDistance) {
                 minDistance = totalCost
@@ -80,7 +91,11 @@ class MapMatchingEngine {
             matchedRoadName = closestSegment?.name ?: "Unknown Route",
             orthogonalDistanceMeters = minDistance,
             headingDeltaDeg = bestHeadingDelta,
-            isSnapped = isSnapped
+            isSnapped = isSnapped,
+            roadBearingDeg = closestSegment?.bearingDeg ?: headingDeg,
+            matchedLayerId = closestSegment?.layerId ?: "L0",
+            matchedLayerLevel = closestSegment?.layerLevel ?: "L0",
+            nominalAltitudeMeters = closestSegment?.nominalAltitudeMeters ?: 0f
         )
     }
 

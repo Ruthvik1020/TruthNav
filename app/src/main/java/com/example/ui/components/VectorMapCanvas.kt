@@ -49,11 +49,15 @@ fun VectorMapCanvas(
     rawDrTrail: List<TrajectoryPoint>,
     aiInsTrail: List<TrajectoryPoint>,
     mapMatchedTrail: List<TrajectoryPoint>,
+    visualTrail: List<TrajectoryPoint> = emptyList(),
     roadSegments: List<RoadSegment>,
     destination: TargetDestination? = null,
     outageZoneStartSec: Int? = null,
     outageZoneEndSec: Int? = null,
     mapOptions: MapDisplayOptions,
+    spoofingReport: GnssSpoofingReport? = null,
+    multiHypothesisReport: MultiHypothesisReport? = null,
+    undergroundReport: UndergroundTopologyReport? = null,
     terrainTileEngine: TerrainTileEngine? = null,
     tileRepaintTrigger: Long = 0L,
     isVoiceSpeaking: Boolean = false,
@@ -513,6 +517,26 @@ fun VectorMapCanvas(
                 }
             }
 
+            // 5. Visual-Inertial Corrected Trail (Purple / Violet dashed)
+            if (mapOptions.showVisualIns && visualTrail.size > 1) {
+                val visPath = Path()
+                val start = geoToCanvas(visualTrail.first().lat, visualTrail.first().lng)
+                visPath.moveTo(start.x, start.y)
+                for (i in 1 until visualTrail.size) {
+                    val pt = geoToCanvas(visualTrail[i].lat, visualTrail[i].lng)
+                    visPath.lineTo(pt.x, pt.y)
+                }
+                drawPath(
+                    path = visPath,
+                    color = Color(0xFFA855F7),
+                    style = Stroke(
+                        width = 2.2f * zoomScale.coerceIn(0.8f, 2.5f),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
+                        cap = StrokeCap.Round
+                    )
+                )
+            }
+
             // ============================================================
             // 5. RESPONSIVE VEHICLE CURSOR (ADAPTIVE SIZE ON ZOOM IN / OUT)
             // ============================================================
@@ -618,8 +642,9 @@ fun VectorMapCanvas(
                 center = vehicleCanvasPos
             )
 
-            // 5.5 Speed Capsule Badge (Current Location Cursor)
-            val speedLabel = "${vehicleState.speedKmph.toInt()} km/h · LIVE GPS"
+            // 5.5 Speed Capsule Badge (Current Location Cursor) with 3D Layer Level
+            val layerTag = if (vehicleState.roadLayerLevel.isNotEmpty() && vehicleState.roadLayerLevel != "L0") " · ${vehicleState.roadLayerLevel}" else ""
+            val speedLabel = "${vehicleState.speedKmph.toInt()} km/h · LIVE GPS$layerTag"
             val textLayout = textMeasurer.measure(
                 text = speedLabel,
                 style = TextStyle(
@@ -660,6 +685,171 @@ fun VectorMapCanvas(
                     badgeTopLeft.y + 3f * adaptiveCursorScale
                 )
             )
+
+            // 5.6 GNSS Spoofing Ghost Marker (Killer Demonstration)
+            if (spoofingReport != null && spoofingReport.isSpoofingDetected && spoofingReport.spoofedLat != 0.0) {
+                val spoofedCanvasPos = geoToCanvas(spoofingReport.spoofedLat, spoofingReport.spoofedLng)
+
+                // Dashed warning jump line from true vehicle to rejected jump coordinate
+                drawLine(
+                    color = RedJam.copy(alpha = 0.85f),
+                    start = vehicleCanvasPos,
+                    end = spoofedCanvasPos,
+                    strokeWidth = 2.4f * adaptiveCursorScale,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f)
+                )
+
+                // Outer red pulse circle
+                drawCircle(
+                    color = RedJam.copy(alpha = 0.22f),
+                    radius = 18f * adaptiveCursorScale,
+                    center = spoofedCanvasPos
+                )
+                // Rejected coordinate center dot
+                drawCircle(
+                    color = RedJam,
+                    radius = 6f * adaptiveCursorScale,
+                    center = spoofedCanvasPos
+                )
+
+                // Ghost annotation card
+                val ghostText = "⚠ REJECTED GNSS JUMP (+27m)\nUNPROTECTED APP JUMPS HERE\nNAVSENSE-X: INS+MAP RETAINED"
+                val ghostLayout = textMeasurer.measure(
+                    text = ghostText,
+                    style = TextStyle(
+                        color = Color(0xFFFF5252),
+                        fontSize = (8.5f * adaptiveCursorScale).sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+                val ghostWidth = ghostLayout.size.width + 12f
+                val ghostHeight = ghostLayout.size.height + 8f
+                val ghostTopLeft = Offset(
+                    spoofedCanvasPos.x - ghostWidth / 2f,
+                    spoofedCanvasPos.y + 12f * adaptiveCursorScale
+                )
+                drawRoundRect(
+                    color = SpaceDark.copy(alpha = 0.92f),
+                    topLeft = ghostTopLeft,
+                    size = Size(ghostWidth, ghostHeight),
+                    cornerRadius = CornerRadius(8f, 8f)
+                )
+                drawRoundRect(
+                    color = RedJam,
+                    topLeft = ghostTopLeft,
+                    size = Size(ghostWidth, ghostHeight),
+                    cornerRadius = CornerRadius(8f, 8f),
+                    style = Stroke(width = 1.2f)
+                )
+                drawText(
+                    textLayoutResult = ghostLayout,
+                    topLeft = Offset(ghostTopLeft.x + 6f, ghostTopLeft.y + 4f)
+                )
+            }
+
+            // 5.7 Multi-Hypothesis Localization Candidates Swarm (Particle Filter / HMM)
+            if (multiHypothesisReport != null && multiHypothesisReport.candidates.size > 1) {
+                for (cand in multiHypothesisReport.candidates) {
+                    if (cand.isLeading) continue // Leading candidate is tracked by primary vehicle cursor
+                    val cLat = if (cand.snappedLat != 0.0) cand.snappedLat else vehicleState.lat + (cand.lateralOffsetMeters / 111111.0) * cos(Math.toRadians(vehicleState.headingDeg.toDouble() + 90.0))
+                    val cLng = if (cand.snappedLng != 0.0) cand.snappedLng else vehicleState.lng + (cand.lateralOffsetMeters / (111111.0 * cos(Math.toRadians(vehicleState.lat)))) * sin(Math.toRadians(vehicleState.headingDeg.toDouble() + 90.0))
+                    val candPos = geoToCanvas(cLat, cLng)
+                    val candColor = if (cand.rank == 2) AmberAccent else Color(0xFF64B5F6)
+
+                    // Dashed ambiguity tie link
+                    drawLine(
+                        color = candColor.copy(alpha = 0.65f),
+                        start = vehicleCanvasPos,
+                        end = candPos,
+                        strokeWidth = 1.6f * adaptiveCursorScale,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                    )
+
+                    // Ghost candidate beacon circle
+                    drawCircle(
+                        color = candColor.copy(alpha = 0.20f),
+                        radius = 12f * adaptiveCursorScale,
+                        center = candPos
+                    )
+                    drawCircle(
+                        color = candColor,
+                        radius = 4f * adaptiveCursorScale,
+                        center = candPos
+                    )
+
+                    // Candidate probability callout
+                    val candLabel = "Cand #${cand.rank}: ${cand.roadName}\nP = ${"%.2f".format(cand.probability)}"
+                    val candLayout = textMeasurer.measure(
+                        text = candLabel,
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = (7.5f * adaptiveCursorScale).sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                    val cW = candLayout.size.width + 10f * adaptiveCursorScale
+                    val cH = candLayout.size.height + 6f * adaptiveCursorScale
+                    val cTopLeft = Offset(candPos.x - cW / 2f, candPos.y + 8f * adaptiveCursorScale)
+
+                    drawRoundRect(
+                        color = SpaceDark.copy(alpha = 0.90f),
+                        topLeft = cTopLeft,
+                        size = Size(cW, cH),
+                        cornerRadius = CornerRadius(6f, 6f)
+                    )
+                    drawRoundRect(
+                        color = candColor.copy(alpha = 0.8f),
+                        topLeft = cTopLeft,
+                        size = Size(cW, cH),
+                        cornerRadius = CornerRadius(6f, 6f),
+                        style = Stroke(width = 1f)
+                    )
+                    drawText(
+                        textLayoutResult = candLayout,
+                        topLeft = Offset(cTopLeft.x + 5f * adaptiveCursorScale, cTopLeft.y + 3f * adaptiveCursorScale)
+                    )
+                }
+            }
+
+            // 5.8 Underground Topology Lock Indicator
+            if (undergroundReport != null && undergroundReport.isUndergroundLocked) {
+                val undergroundLabel = "▼ UNDERGROUND TOPOLOGY: LOCKED TO BOTTOM ROAD\n${undergroundReport.lockedRoadName} (${undergroundReport.lockedLayerLevel}) · ${undergroundReport.confidencePercent}% Confidence"
+                val uLayout = textMeasurer.measure(
+                    text = undergroundLabel,
+                    style = TextStyle(
+                        color = OrangeFlame,
+                        fontSize = (8.0f * adaptiveCursorScale).sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                )
+                val uW = uLayout.size.width + 14f * adaptiveCursorScale
+                val uH = uLayout.size.height + 8f * adaptiveCursorScale
+                val uTopLeft = Offset(
+                    vehicleCanvasPos.x - uW / 2f,
+                    vehicleCanvasPos.y - (36f * adaptiveCursorScale + uH)
+                )
+
+                drawRoundRect(
+                    color = Color(0xFF1E140C).copy(alpha = 0.94f),
+                    topLeft = uTopLeft,
+                    size = Size(uW, uH),
+                    cornerRadius = CornerRadius(8f, 8f)
+                )
+                drawRoundRect(
+                    color = OrangeFlame,
+                    topLeft = uTopLeft,
+                    size = Size(uW, uH),
+                    cornerRadius = CornerRadius(8f, 8f),
+                    style = Stroke(width = 1.4f)
+                )
+                drawText(
+                    textLayoutResult = uLayout,
+                    topLeft = Offset(uTopLeft.x + 7f * adaptiveCursorScale, uTopLeft.y + 4f * adaptiveCursorScale)
+                )
+            }
 
             // ============================================================
             // 6. CURSOR 2: SELECTED DESTINATION TARGET CURSOR
@@ -803,6 +993,42 @@ fun VectorMapCanvas(
                         destBadgeTopLeft.y + 3f * adaptiveCursorScale
                     )
                 )
+            }
+        }
+
+        // ============================================================
+        // 0. FLOATING SPOOFING SECURITY ALERT BANNER (IF SPOOFED)
+        // ============================================================
+        if (spoofingReport != null && spoofingReport.isSpoofingDetected) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = RedJam.copy(alpha = 0.95f),
+                border = androidx.compose.foundation.BorderStroke(1.2.dp, Color.White),
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 16.dp)
+                    .testTag("spoofing_alert_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GppBad,
+                        contentDescription = "Spoofing Alert",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "⚠ GNSS INCONSISTENCY DETECTED · SPOOFING REJECTED · INS + MAP RETAINED",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
 

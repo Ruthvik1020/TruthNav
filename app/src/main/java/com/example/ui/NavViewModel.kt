@@ -25,10 +25,11 @@ enum class DataSourceMode {
 }
 
 data class MapDisplayOptions(
-    val showGroundTruth: Boolean = false,
-    val showRawDr: Boolean = false,
-    val showAiFusion: Boolean = true,
-    val showMapMatched: Boolean = false,
+    val showGroundTruth: Boolean = true,
+    val showRawDr: Boolean = true, // Trajectory A (Physics Pure IMU)
+    val showAiFusion: Boolean = true, // Trajectory B (AI Corrected)
+    val showMapMatched: Boolean = true, // Trajectory C (Map Constrained)
+    val showVisualIns: Boolean = true, // Trajectory D (Visual Corrected)
     val showRoadNetwork: Boolean = false,
     val followVehicle: Boolean = true,
     val mapLayerType: MapLayerType = MapLayerType.TERRAIN_TOPO
@@ -71,6 +72,24 @@ class NavViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _driftMetrics = MutableStateFlow(DriftMetrics())
     val driftMetrics: StateFlow<DriftMetrics> = _driftMetrics.asStateFlow()
+
+    private val _digitalTwinMetrics = MutableStateFlow(DigitalTwinMetrics())
+    val digitalTwinMetrics: StateFlow<DigitalTwinMetrics> = _digitalTwinMetrics.asStateFlow()
+
+    private val _navigationIntegrity = MutableStateFlow(NavigationIntegrityReport())
+    val navigationIntegrity: StateFlow<NavigationIntegrityReport> = _navigationIntegrity.asStateFlow()
+
+    private val _gnssSpoofingReport = MutableStateFlow(GnssSpoofingReport())
+    val gnssSpoofingReport: StateFlow<GnssSpoofingReport> = _gnssSpoofingReport.asStateFlow()
+
+    private val _roadLayerState = MutableStateFlow(RoadLayerState())
+    val roadLayerState: StateFlow<RoadLayerState> = _roadLayerState.asStateFlow()
+
+    private val _undergroundTopologyReport = MutableStateFlow(fusionEngine.currentUndergroundReport)
+    val undergroundTopologyReport: StateFlow<UndergroundTopologyReport> = _undergroundTopologyReport.asStateFlow()
+
+    private val _multiHypothesisReport = MutableStateFlow(fusionEngine.currentMultiHypothesisReport)
+    val multiHypothesisReport: StateFlow<MultiHypothesisReport> = _multiHypothesisReport.asStateFlow()
 
     private val _calibration = MutableStateFlow(fusionEngine.calibrator.currentCalibration)
     val calibration: StateFlow<CalibrationAngles> = _calibration.asStateFlow()
@@ -138,6 +157,18 @@ class NavViewModel(application: Application) : AndroidViewModel(application) {
         fusionEngine.mapMatcher.setRoadNetwork(scenario.roadSegments)
         _vehicleState.value = fusionEngine.currentState
         _driftMetrics.value = DriftMetrics()
+        _digitalTwinMetrics.value = fusionEngine.getDigitalTwinMetrics(firstPt.lat, firstPt.lng, scenario.title)
+        _navigationIntegrity.value = fusionEngine.getNavigationIntegrityReport()
+    }
+
+    fun setSimulatedNavState(state: AiNavState?) {
+        fusionEngine.setManualNavState(state)
+        _navigationIntegrity.value = fusionEngine.getNavigationIntegrityReport()
+        if (state != null) {
+            voiceAssistant.speak("${state.stateCode}: ${state.title}. ${state.description}")
+        } else {
+            voiceAssistant.speak("State machine autonomous navigation restored.")
+        }
     }
 
     fun toggleBenchmarkPlayback() {
@@ -334,6 +365,12 @@ class NavViewModel(application: Application) : AndroidViewModel(application) {
                         _benchmarkTimeSec.value = benchmarkEngine.currentScenarioTimeSec
                         val metrics = fusionEngine.getDriftMetrics(gt.lat, gt.lng)
                         _driftMetrics.value = metrics
+                        _digitalTwinMetrics.value = fusionEngine.getDigitalTwinMetrics(gt.lat, gt.lng, benchmarkEngine.currentScenario.title)
+                        _navigationIntegrity.value = fusionEngine.getNavigationIntegrityReport()
+                        _gnssSpoofingReport.value = fusionEngine.currentSpoofingReport
+                        _roadLayerState.value = fusionEngine.currentRoadLayerState
+                        _undergroundTopologyReport.value = fusionEngine.currentUndergroundReport
+                        _multiHypothesisReport.value = fusionEngine.currentMultiHypothesisReport
 
                         // Acoustic cues on automatic blackout boundaries
                         if (newState.fusionMode != previousFusionMode) {
@@ -381,10 +418,86 @@ class NavViewModel(application: Application) : AndroidViewModel(application) {
 
                     _vehicleState.value = fusionEngine.currentState
                     _driftMetrics.value = fusionEngine.getDriftMetrics(gnss?.lat, gnss?.lng)
+                    _digitalTwinMetrics.value = fusionEngine.getDigitalTwinMetrics(gnss?.lat, gnss?.lng, "Live Sensor Mode")
+                    _navigationIntegrity.value = fusionEngine.getNavigationIntegrityReport()
+                    _gnssSpoofingReport.value = fusionEngine.currentSpoofingReport
+                    _roadLayerState.value = fusionEngine.currentRoadLayerState
+                    _undergroundTopologyReport.value = fusionEngine.currentUndergroundReport
+                    _multiHypothesisReport.value = fusionEngine.currentMultiHypothesisReport
                 }
                 delay(100L)
             }
         }
+    }
+
+    fun toggleUndergroundDescent(active: Boolean) {
+        fusionEngine.undergroundTopologyEngine.setSimulatedDescent(active)
+        if (active) {
+            fusionEngine.barometricEngine.setSimulatedLayer("B1")
+            voiceAssistant.speak("Underground topology descent initiated. Barometric pressure increasing. Locking to bottom road.")
+        } else {
+            fusionEngine.barometricEngine.setSimulatedLayer("L0")
+            voiceAssistant.speak("Returning to surface level topology.")
+        }
+        _roadLayerState.value = fusionEngine.currentRoadLayerState
+        _undergroundTopologyReport.value = fusionEngine.undergroundTopologyEngine.evaluateUndergroundTopology(
+            fusionEngine.currentState,
+            fusionEngine.currentRoadLayerState
+        )
+    }
+
+    fun setMultiHypothesisScenario(scenarioPreset: String) {
+        fusionEngine.multiHypothesisEngine.setScenarioPreset(scenarioPreset)
+        _multiHypothesisReport.value = fusionEngine.multiHypothesisEngine.currentReport
+        val label = when (scenarioPreset) {
+            "PARALLEL_SERVICE_ROAD_SPLIT" -> "Parallel Expressway vs Service Road"
+            "STACKED_FLYOVER_BIFURCATION" -> "Stacked Elevated Flyover Ingress"
+            "SUBTERRANEAN_TUNNEL_PORTAL" -> "Subterranean Tunnel Bore Fork"
+            else -> scenarioPreset
+        }
+        voiceAssistant.speak("Multi-hypothesis scenario loaded: $label")
+    }
+
+    fun toggleSimulatedSpoofingAttack(active: Boolean) {
+        fusionEngine.spoofingDetector.setSimulatedSpoofingAttack(active)
+        if (active) {
+            // Immediately run a spoofed check so report updates instantly
+            val gnss = _currentGnss.value ?: GnssReading(
+                lat = fusionEngine.currentState.lat + 0.00035,
+                lng = fusionEngine.currentState.lng + 0.00025,
+                speedMps = 68.0f / 3.6f,
+                bearingDeg = (fusionEngine.currentState.headingDeg + 31f) % 360f,
+                isValid = true
+            )
+            fusionEngine.processGnss(gnss)
+            _gnssSpoofingReport.value = fusionEngine.currentSpoofingReport
+            _navigationIntegrity.value = fusionEngine.getNavigationIntegrityReport()
+            voiceAssistant.speak("Warning! GNSS inconsistency detected. Heading disagreement 31 degrees, position jump 27 meters. Spoofed coordinate rejected. INS and Map retained.")
+        } else {
+            val normalReport = GnssSpoofingReport(
+                isSpoofingDetected = false,
+                statusSummary = "ALL SIGNALS NOMINAL (GNSS TRUSTED)",
+                actionTaken = "GNSS TRUSTED (FUSION ACTIVE)"
+            )
+            _gnssSpoofingReport.value = normalReport
+            _navigationIntegrity.value = fusionEngine.getNavigationIntegrityReport()
+            voiceAssistant.speak("Spoofing simulation ended. GNSS signal integrity restored.")
+        }
+    }
+
+    fun setTargetRoadLayer(layerCode: String?) {
+        fusionEngine.barometricEngine.setSimulatedLayer(layerCode)
+        _roadLayerState.value = fusionEngine.currentRoadLayerState
+        val label = when (layerCode) {
+            "L2" -> "Elevated Flyover Level 2 (+12 meters)"
+            "L1" -> "Interchange Ramp Level 1 (+6.5 meters)"
+            "L0" -> "Surface Grade Arterial (0 meters)"
+            "L-1" -> "Underpass Grade Separation (-5.8 meters)"
+            "B1" -> "Subsurface Tunnel Level B1 (-9.2 meters)"
+            "B2" -> "Deep Underground Level B2 (-14.6 meters)"
+            else -> "Automatic Barometric Identification"
+        }
+        voiceAssistant.speak("Road layer targeted: $label")
     }
 
     override fun onCleared() {

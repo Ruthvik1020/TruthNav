@@ -15,7 +15,8 @@ class IoVnbdBenchmarkEngine {
         createUrbanCanyonScenario(),
         createLongTunnelScenario(),
         createUndergroundParkingScenario(),
-        createDenseForestScenario()
+        createDenseForestScenario(),
+        createUndergroundTopologyScenario()
     )
 
     private var activeScenarioIndex = 0
@@ -384,6 +385,105 @@ class IoVnbdBenchmarkEngine {
                 outageEndSec = 125,
                 totalDistanceMeters = 1680f,
                 maxSpeedKmph = 48f,
+                roadSegments = segments,
+                groundTruthPoints = points
+            )
+        }
+
+        fun createUndergroundTopologyScenario(): BenchmarkScenario {
+            val points = mutableListOf<TrajectoryPoint>()
+            val segments = mutableListOf<RoadSegment>()
+
+            val baseLat = 12.9352
+            val baseLng = 77.6245
+
+            // Road A: Surface Main Carriageway (Level 0, 0m relative)
+            val segA1 = RoadSegment(
+                id = "seg_a_surface",
+                name = "Road A: Surface Main Carriageway",
+                startNode = RoadNode("na1", baseLat, baseLng),
+                endNode = RoadNode("na2", baseLat + 0.0035, baseLng + 0.0035),
+                speedLimitKmph = 60,
+                layerLevel = "L0",
+                nominalAltitudeMeters = 0.0f
+            )
+
+            // Road B: Parallel Service Road (Level 0, offset by only 12m)
+            val offsetB = 0.00010
+            val segB1 = RoadSegment(
+                id = "seg_b_service",
+                name = "Road B: Surface Service Arterial",
+                startNode = RoadNode("nb1", baseLat - offsetB, baseLng),
+                endNode = RoadNode("nb2", baseLat + 0.0035 - offsetB, baseLng + 0.0035),
+                speedLimitKmph = 40,
+                layerLevel = "L0",
+                nominalAltitudeMeters = 0.0f
+            )
+
+            // Road C: Subterranean Bottom Tunnel (Runs directly underneath Road A, nominal alt -12.4m)
+            val segC1 = RoadSegment(
+                id = "seg_c_tunnel_bottom",
+                name = "Road C: Subterranean Tunnel Express (Bottom Road)",
+                startNode = RoadNode("nc1", baseLat + 0.0015, baseLng + 0.0015),
+                endNode = RoadNode("nc2", baseLat + 0.0050, baseLng + 0.0050),
+                speedLimitKmph = 70,
+                layerLevel = "B1",
+                nominalAltitudeMeters = -12.4f
+            )
+
+            segments.addAll(listOf(segA1, segB1, segC1))
+
+            var curLat = baseLat - offsetB
+            var curLng = baseLng
+            var curHeading = 45f
+            var curAlt = 920.0
+
+            for (i in 0..160) {
+                val speed = when {
+                    i in 30..50 -> 35f // Ingress ramp speed reduction
+                    i in 50..130 -> 55f // Subterranean tunnel bore speed
+                    else -> 45f
+                }
+
+                // Ingress Turn History: Turn right onto ramp, then straighten into tunnel
+                if (i in 30..38) curHeading += 4f // Turn towards tunnel portal ramp
+                if (i in 39..48) curHeading -= 3.5f // Straighten into bore alignment
+
+                // Barometric Descent: descend -12.5 meters between sec 35 and 65
+                if (i in 35..65) {
+                    curAlt -= 0.41 // total -12.4m descent
+                }
+
+                val rad = Math.toRadians(curHeading.toDouble())
+                val dMeters = (speed / 3.6f) * 1.0f
+                curLat += (dMeters * cos(rad)) / 111132.954
+                curLng += (dMeters * sin(rad)) / (111132.954 * cos(Math.toRadians(curLat)))
+
+                val layer = if (curAlt < 915.0) "B1" else "L0"
+                points.add(
+                    TrajectoryPoint(
+                        lat = curLat,
+                        lng = curLng,
+                        altitude = curAlt,
+                        speedKmph = speed,
+                        headingDeg = curHeading,
+                        type = TrajectoryType.GROUND_TRUTH,
+                        roadLayerId = layer,
+                        relativeAltitudeMeters = (curAlt - 920.0).toFloat()
+                    )
+                )
+            }
+
+            return BenchmarkScenario(
+                id = "iovnbd_underground_topology",
+                title = "Underground Topology & Multi-Hypothesis Lab",
+                description = "Collinear Road A (Surface), Road B (Service), and Road C (Bottom Tunnel). Evaluates Heading + Barometric Descent + Turn History + Connectivity -> Bottom Road.",
+                locationName = "Underground Metro Corridor & Multi-Level ORR",
+                totalDurationSeconds = 160,
+                outageStartSec = 35,
+                outageEndSec = 145,
+                totalDistanceMeters = 2150f,
+                maxSpeedKmph = 60f,
                 roadSegments = segments,
                 groundTruthPoints = points
             )
