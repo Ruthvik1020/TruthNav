@@ -1,0 +1,7 @@
+{
+  "name": "NavDR",
+  "description": "ISRO AI-ML based Intelligent Dead Reckoning & GNSS-INS Fusion System for seamless vehicle navigation during GNSS outages.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
